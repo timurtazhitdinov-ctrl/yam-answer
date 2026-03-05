@@ -1,25 +1,18 @@
 const { getChat, sendMessage } = require('./yandex');
+const { getNextCode, markCodeUsed, hasReplied, markReplied } = require('./db');
 
 const BUSINESS_ID = process.env.YANDEX_BUSINESS_ID;
-
-// Track chats we already replied to (in-memory; resets on redeploy)
-// For persistence, replace with a simple file or DB
-const repliedChats = new Set();
-
-// The template message sent to every new chat
-// Edit PROMO_CODE and STOREFRONT_URL before deploying
-const PROMO_CODE = process.env.PROMO_CODE || 'XXXXXXX';
 const STOREFRONT_URL = process.env.STOREFRONT_URL || 'https://market.yandex.ru/shop--your-shop';
 
-function buildReplyMessage() {
+function buildReplyMessage(code) {
   return (
-    `Спасибо за интерес к нашему магазину! 🎉\n\n` +
+    `Спасибо за интерес к нашему магазину!\n\n` +
     `Чтобы активировать промокод на скидку 12%, следуйте инструкции:\n\n` +
-    `1️⃣ Удалите товар из корзины (важно сделать это ДО перехода по ссылке)\n` +
-    `2️⃣ Перейдите по ссылке и подпишитесь на магазин:\n${STOREFRONT_URL}\n` +
-    `3️⃣ Найдите нужный товар в каталоге магазина и добавьте в корзину\n` +
-    `4️⃣ Введите промокод при оформлении заказа:\n\n` +
-    `🏷 Промокод (12%): ${PROMO_CODE}\n\n` +
+    `1) Удалите товар из корзины (важно сделать это ДО перехода по ссылке)\n` +
+    `2) Перейдите по ссылке и подпишитесь на магазин:\n${STOREFRONT_URL}\n` +
+    `3) Найдите нужный товар в каталоге магазина и добавьте в корзину\n` +
+    `4) Введите промокод при оформлении заказа:\n\n` +
+    `Промокод (12%): ${code}\n\n` +
     `Если возникнут вопросы — пишите, поможем!`
   );
 }
@@ -27,26 +20,30 @@ function buildReplyMessage() {
 async function handleChatEvent(notification) {
   const { type, chatId } = notification;
 
-  // We only care about new chats or incoming messages
   if (type !== 'CHAT_CREATED' && type !== 'CHAT_MESSAGE_SENT') return;
 
-  // Only reply once per chat
-  if (repliedChats.has(chatId)) return;
+  // Ignore our own outgoing messages
+  if (type === 'CHAT_MESSAGE_SENT' && notification.role !== 'USER') return;
 
-  // For CHAT_MESSAGE_SENT make sure the message is from the buyer, not us
-  if (type === 'CHAT_MESSAGE_SENT') {
-    const { role } = notification;
-    if (role !== 'USER') return; // ignore our own messages
+  // Only reply once per chat (persisted in DB across restarts)
+  if (hasReplied(chatId)) return;
+
+  // Pick the next unused promo code
+  const row = getNextCode();
+  if (!row) {
+    console.warn(`No promo codes left! Chat ${chatId} was not answered.`);
+    return;
   }
 
   try {
-    // Fetch chat to get campaignId (shopId) for context, optional but useful
     await getChat(BUSINESS_ID, chatId);
+    await sendMessage(BUSINESS_ID, chatId, buildReplyMessage(row.code));
 
-    await sendMessage(BUSINESS_ID, chatId, buildReplyMessage());
-    repliedChats.add(chatId);
+    // Persist both the reply and the code usage atomically
+    markCodeUsed(row.id, String(chatId));
+    markReplied(chatId);
 
-    console.log(`Replied to chat ${chatId}`);
+    console.log(`Replied to chat ${chatId} with code ${row.code}`);
   } catch (err) {
     console.error(`Failed to reply to chat ${chatId}:`, err.response?.data || err.message);
   }
