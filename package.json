@@ -1,0 +1,15 @@
+{
+  "name": "yam-answer-bot",
+  "version": "1.0.0",
+  "description": "Yandex Market chat auto-reply bot for storefront promo",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5"
+  }
+}
